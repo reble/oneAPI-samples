@@ -27,82 +27,37 @@ const float ratio = 0.5;  // CPU to GPU offload ratio
 const float alpha = 0.5;  // coeff for triad calculation
 
 const size_t array_size = 16;
-std::array<float, array_size> a_array;  // input
-std::array<float, array_size> b_array;  // input
-std::array<float, array_size> c_array;  // output
 
-void PrintArr(const char* text, const std::array<float, array_size>& array) {
+template<class T>
+void PrintArr(const char* text, const T& array) {
   std::cout << text;
   for (const auto& s : array) std::cout << s << ' ';
   std::cout << "\n";
 }
 
-using async_node_type = tbb::flow::async_node<float, done_tag>;
-using gateway_type = async_node_type::gateway_type;
-
-class AsyncActivity {
-  gateway_type* gateway_ptr;
-  float offload_ratio;
-  std::atomic<bool> submit_flag;
-  std::thread service_thread;
-
- public:
-  AsyncActivity() : gateway_ptr(nullptr), offload_ratio(0), submit_flag(false),
-    service_thread( [this] {
-      while( !submit_flag ) {
-        std::this_thread::yield();
-      }
-      // Execute the kernel over a portion of the array range
-      size_t array_size_sycl = std::ceil(array_size * offload_ratio);
-      std::cout << "start index for GPU = 0; end index for GPU = "
-                << array_size_sycl << "\n";
-      const float coeff = alpha;  // coeff is a local varaible
-
-      // By including all the SYCL work in a {} block, we ensure
-      // all SYCL tasks must complete before exiting the block
-      {  // starting SYCL code
-        sycl::range<1> n_items{array_size_sycl}; 
-        sycl::buffer a_buffer(a_array);
-        sycl::buffer b_buffer(b_array);
-        sycl::buffer c_buffer(c_array);
-
-        sycl::queue q(sycl::default_selector{}, dpc_common::exception_handler);
-        q.submit([&](sycl::handler& h) {     
-              sycl::accessor a_accessor(a_buffer, h, sycl::read_only);
-              sycl::accessor b_accessor(b_buffer, h, sycl::read_only);
-              sycl::accessor c_accessor(c_buffer, h, sycl::write_only);
-
-              h.parallel_for( n_items, [=](sycl::id<1> index) {
-                    c_accessor[index] = a_accessor[index] + b_accessor[index] * coeff;
-                  });  // end of the kernel -- parallel for
-            }).wait();
-      }  // end of the scope for SYCL code; wait unti queued work completes;
-
-      gateway_ptr->try_put(done_tag{});
-      gateway_ptr->release_wait();
-    } ) {}
-
-  ~AsyncActivity() {
-    service_thread.join();
-  }
-
-  void submit(float ratio, gateway_type& gateway) {
-    gateway.reserve_wait();
-    offload_ratio = ratio;
-    gateway_ptr = &gateway;
-    submit_flag = true;
-  }
-};
-
 int main() {
+
+  sycl::queue q(sycl::default_selector{}, dpc_common::exception_handler);
+
+  // USM allocator for data of type int in shared memory
+  typedef sycl::usm_allocator<float, sycl::usm::alloc::shared> vec_alloc;
+  // Create allocator for device associated with q
+  vec_alloc myAlloc(q);
+  // Create std vectors with the allocator
+  std::vector<float, vec_alloc >
+  a_array(array_size, myAlloc),
+  b_array(array_size, myAlloc),
+  c_array(array_size, myAlloc);
+
   // init input arrays
-  std::iota(a_array.begin(), a_array.end(), 0);
-  std::iota(b_array.begin(), b_array.end(), 0);
+  std::iota(a_array.begin(), a_array.end(), 0.0f);
+  std::iota(b_array.begin(), b_array.end(), 0.0f);
 
   int nth = 4; // number of threads
 
   auto mp = tbb::global_control::max_allowed_parallelism;
-  tbb::global_control gc(mp, nth + 1);  // One more thread, but sleeping
+
+  tbb::global_control gc(mp, nth /* + 1*/);  // No need for additional (sleeping) thread!
   tbb::flow::graph g;
 
   // Input node:
@@ -131,12 +86,39 @@ int main() {
         return done_tag{};
       }};
 
+  using async_node_type = tbb::flow::async_node<float, done_tag>;
+  using gateway_type = async_node_type::gateway_type;
+
   // async node -- GPU
-  AsyncActivity async_act;
   async_node_type a_node{
       g, tbb::flow::unlimited,
-      [&async_act](const float& offload_ratio, gateway_type& gateway) {
-        async_act.submit(offload_ratio, gateway);
+      [&](const float& offload_ratio, gateway_type& gateway) {
+        gateway.reserve_wait();
+        //async_act.submit(offload_ratio, gateway);
+        size_t array_size_sycl = std::ceil(array_size * offload_ratio);
+        std::cout << "start index for GPU = 0; end index for GPU = "
+                  << array_size_sycl << "\n";
+        const float coeff = alpha;  // coeff is a local varaible
+
+        // Get pointer to vector data for access in kernel
+        auto A = a_array.data();
+        auto B = b_array.data();
+        auto C = c_array.data();
+
+        auto event = q.submit([&](sycl::handler& h) {
+            h.parallel_for( sycl::range<1>{array_size_sycl}, [=](sycl::id<1> index) {
+              C[index] = A[index] + B[index] * coeff;
+            });  // end of the kernel -- parallel for
+          });
+          // enqueue host task that notifies flow graph that device is done! 
+          q.submit([&](sycl::handler& h) {
+            h.depends_on(event);
+            h.host_task([&](){
+              gateway.try_put(done_tag{});
+              gateway.release_wait();
+            });
+          });
+        }
       }};
 
   // join node
