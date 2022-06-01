@@ -17,26 +17,26 @@
 // https://software.intel.com/en-us/articles/code-sample-two-dimensional-finite-difference-wave-propagation-in-isotropic-media-iso2dfd
 //
 // For comprehensive instructions regarding DPC++ Programming, go to
-// https://software.intel.com/en-us/oneapi-programming-guide 
+// https://software.intel.com/en-us/oneapi-programming-guide
 // and search based on relevant terms noted in the comments.
 //
 // DPC++ material used in this code sample:
 //
 // Basic structures of DPC++:
 //   DPC++ Queues (including device selectors and exception handlers)
-//   DPC++ Buffers and accessors (communicate data between the host and the device)
-//   DPC++ Kernels (including parallel_for function and range<2> objects)
+//   DPC++ Buffers and accessors (communicate data between the host and the
+//   device) DPC++ Kernels (including parallel_for function and range<2>
+//   objects)
 //
 
-#include <fstream>
-#include <iostream>
-#include <string>
 #include <CL/sycl.hpp>
 #include <cmath>
 #include <cstring>
+#include <fstream>
+#include <iostream>
 #include <stdio.h>
-
-#include "dpc_common.hpp"
+#include <string>
+#include <sycl/ext/oneapi/experimental/graph.hpp>
 
 using namespace cl::sycl;
 using namespace std;
@@ -68,7 +68,7 @@ void Usage(const string &program_name) {
  * Host-Code
  * Function used for initialization
  */
-void Initialize(float* ptr_prev, float* ptr_next, float* ptr_vel, size_t n_rows,
+void Initialize(float *ptr_prev, float *ptr_next, float *ptr_vel, size_t n_rows,
                 size_t n_cols) {
   cout << "Initializing ...\n";
 
@@ -103,17 +103,15 @@ void Initialize(float* ptr_prev, float* ptr_next, float* ptr_vel, size_t n_rows,
  * Host-Code
  * Utility function to print device info
  */
-void PrintTargetInfo(queue& q) {
+void PrintTargetInfo(queue &q) {
   auto device = q.get_device();
-  auto max_block_size =
-      device.get_info<info::device::max_work_group_size>();
+  auto max_block_size = device.get_info<info::device::max_work_group_size>();
 
-  auto max_EU_count =
-      device.get_info<info::device::max_compute_units>();
+  auto max_EU_count = device.get_info<info::device::max_compute_units>();
 
-  cout<< " Running on " << device.get_info<info::device::name>()<<"\n";
-  cout<< " The Device Max Work Group Size is : "<< max_block_size<<"\n";
-  cout<< " The Device Max EUCount is : " << max_EU_count<<"\n";
+  cout << " Running on " << device.get_info<info::device::name>() << "\n";
+  cout << " The Device Max Work Group Size is : " << max_block_size << "\n";
+  cout << " The Device Max EUCount is : " << max_EU_count << "\n";
 }
 
 /*
@@ -121,9 +119,9 @@ void PrintTargetInfo(queue& q) {
  * Utility function to calculate L2-norm between resulting buffer and reference
  * buffer
  */
-bool WithinEpsilon(float* output, float* reference, const size_t dim_x,
-                    const size_t dim_y, const unsigned int radius,
-                    const float delta = 0.01f) {
+bool WithinEpsilon(float *output, float *reference, const size_t dim_x,
+                   const size_t dim_y, const unsigned int radius,
+                   const float delta = 0.01f) {
   ofstream err_file;
   err_file.open("error_diff.txt");
 
@@ -138,8 +136,9 @@ bool WithinEpsilon(float* output, float* reference, const size_t dim_x,
         norm2 += difference * difference;
         if (difference > delta) {
           error = true;
-          err_file<<" ERROR: "<<ix<<", "<<iy<<"   "<<*output<<"   instead of "<<
-                   *reference<<"  (|e|="<<difference<<")\n";
+          err_file << " ERROR: " << ix << ", " << iy << "   " << *output
+                   << "   instead of " << *reference << "  (|e|=" << difference
+                   << ")\n";
         }
       }
 
@@ -150,7 +149,8 @@ bool WithinEpsilon(float* output, float* reference, const size_t dim_x,
 
   err_file.close();
   norm2 = sqrt(norm2);
-  if (error) printf("error (Euclidean norm): %.9e\n", norm2);
+  if (error)
+    printf("error (Euclidean norm): %.9e\n", norm2);
   return error;
 }
 
@@ -159,12 +159,12 @@ bool WithinEpsilon(float* output, float* reference, const size_t dim_x,
  * CPU implementation for wavefield modeling
  * Updates wavefield for the number of iterations given in nIteratons parameter
  */
-void Iso2dfdIterationCpu(float* next, float* prev, float* vel,
-                            const float dtDIVdxy, int n_rows, int n_cols,
-                            int n_iterations) {
-  float* swap;
+void Iso2dfdIterationCpu(float *next, float *prev, float *vel,
+                         const float dtDIVdxy, int n_rows, int n_cols,
+                         int n_iterations) {
+  float *swap;
   float value = 0.0;
-  int   gid = 0;
+  int gid = 0;
   for (unsigned int k = 0; k < n_iterations; k += 1) {
     for (unsigned int i = 1; i < n_rows - half_length; i += 1) {
       for (unsigned int j = 1; j < n_cols - half_length; j += 1) {
@@ -194,9 +194,8 @@ void Iso2dfdIterationCpu(float* next, float* prev, float* vel,
  * Range kernel is used to spawn work-items in x, y dimension
  *
  */
-void Iso2dfdIterationGlobal(id<2> it, float* next, float* prev,
-                               float* vel, const float dtDIVdxy, int n_rows,
-                               int n_cols) {
+void Iso2dfdIterationGlobal(id<2> it, float *next, float *prev, float *vel,
+                            const float dtDIVdxy, int n_rows, int n_cols) {
   float value = 0.0;
 
   // Compute global id
@@ -223,13 +222,13 @@ void Iso2dfdIterationGlobal(id<2> it, float* next, float* prev,
   }
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
   // Arrays used to update the wavefield
-  float* prev_base;
-  float* next_base;
-  float* next_cpu;
+  float *prev_base;
+  float *next_base;
+  float *next_cpu;
   // Array to store wave velocity
-  float* vel_base;
+  float *vel_base;
 
   bool error = false;
 
@@ -251,11 +250,20 @@ int main(int argc, char* argv[]) {
   // Compute the total size of grid
   size_t n_size = n_rows * n_cols;
 
+  // Define device selector as 'default'
+  default_selector device_selector;
+
+  // Create a device queue using DPC++ class queue
+  property_list properties{
+      property::queue::in_order(),
+      sycl::ext::oneapi::property::queue::lazy_execution{}};
+  queue q{default_selector{}, properties};
+
   // Allocate arrays to hold wavefield and velocity
-  prev_base = new float[n_size];
-  next_base = new float[n_size];
+  prev_base = malloc_shared<float>(n_size, q);
+  next_base = malloc_shared<float>(n_size, q);
   next_cpu = new float[n_size];
-  vel_base = new float[n_size];
+  vel_base = malloc_shared<float>(n_size, q);
 
   // Compute constant value (delta t)^2 (delta x)^2. To be used in wavefield
   // update
@@ -267,34 +275,33 @@ int main(int argc, char* argv[]) {
   cout << "Grid Sizes: " << n_rows << " " << n_cols << "\n";
   cout << "Iterations: " << n_iterations << "\n\n";
 
-  // Define device selector as 'default'
-  default_selector device_selector;
-
-  // Create a device queue using DPC++ class queue
-  queue q(device_selector, dpc_common::exception_handler);
-
   cout << "Computing wavefield in device ..\n";
   // Display info about device
   PrintTargetInfo(q);
 
   // Start timer
-  dpc_common::TimeInterval t_offload;
+  auto pt0 = std::chrono::high_resolution_clock::now();
 
-  {  // Begin buffer scope
-    // Create buffers using DPC++ class buffer
-    buffer next_buf(next_base, range(n_size));
-    buffer prev_buf(prev_base, range(n_size));
-    buffer vel_buf(vel_base, range(n_size));
+  auto g = sycl::ext::oneapi::experimental::make_graph();
 
-    // Iterate over time steps
-    for (unsigned int k = 0; k < n_iterations; k += 1) {
-      // Submit command group for execution
-      q.submit([&](auto &h) {
-        // Create accessors
-        accessor next_a(next_buf, h);
-        accessor prev_a(prev_buf, h);
-        accessor vel_a(vel_buf, h, read_only);
+  auto node_even = g.add_node([&](sycl::handler &h) {
+    // Define local and global range
+    auto global_range = range<2>(n_rows, n_cols);
 
+    // Send a DPC++ kernel (lambda) for parallel execution
+    // The function that executes a single iteration is called
+    // "iso_2dfd_iteration_global"
+    //    alternating the 'next' and 'prev' parameters which effectively
+    //    swaps their content at every iteration.
+    //    Workaround for SYCL Graph: use a shared variable denoting if it is an
+    //    even or odd iteration to switch the 'next' and 'prev' pointers.
+    h.parallel_for(global_range, [=](auto it) {
+      Iso2dfdIterationGlobal(it, next_base, prev_base, vel_base, dtDIVdxy,
+                             n_rows, n_cols);
+    });
+  });
+  auto node_odd = g.add_node(
+      [&](sycl::handler &h) {
         // Define local and global range
         auto global_range = range<2>(n_rows, n_cols);
 
@@ -303,55 +310,61 @@ int main(int argc, char* argv[]) {
         // "iso_2dfd_iteration_global"
         //    alternating the 'next' and 'prev' parameters which effectively
         //    swaps their content at every iteration.
-        if (k % 2 == 0)
-          h.parallel_for(global_range, [=](auto it) {
-                Iso2dfdIterationGlobal(it, next_a.get_pointer(),
-                                          prev_a.get_pointer(), vel_a.get_pointer(),
-                                          dtDIVdxy, n_rows, n_cols);
-              });
-        else
-          h.parallel_for(global_range, [=](auto it) {
-                Iso2dfdIterationGlobal(it, prev_a.get_pointer(),
-                                          next_a.get_pointer(), vel_a.get_pointer(),
-                                          dtDIVdxy, n_rows, n_cols);
-              });
-      });
+        //    Workaround for SYCL Graph: use a shared variable denoting if it is
+        //    an even or odd iteration to switch the 'next' and 'prev' pointers.
+        h.parallel_for(global_range, [=](auto it) {
+          Iso2dfdIterationGlobal(it, prev_base, next_base, vel_base, dtDIVdxy,
+                                 n_rows, n_cols);
+        });
+      },
+      {node_even});
+  auto exec_graph = g.compile(q);
+  auto pt1 = std::chrono::high_resolution_clock::now();
+  cout << "  Graph creation time: " << 1e-6 * (pt1 - pt0).count() << " ms\n";
 
-    }  // end for
+  auto pt2 = std::chrono::high_resolution_clock::now();
+  exec_graph.exec_and_wait();
+  auto pt3 = std::chrono::high_resolution_clock::now();
+  cout << "  First execution time: " << 1e-6 * (pt3 - pt2).count() << " ms\n";
 
-  }  // buffer scope
-
-  // Wait for commands to complete. Enforce synchronization on the command queue
-  q.wait_and_throw();
+  auto pt4 = std::chrono::high_resolution_clock::now();
+  // Iterate over time steps
+  for (unsigned int k = 1; k < n_iterations / 2; k += 1) {
+    exec_graph.exec_and_wait();
+  } // end for
 
   // Compute and display time used by device
-  auto time = t_offload.Elapsed();
+  auto pt5 = std::chrono::high_resolution_clock::now();
 
-  cout << "Offload time: " << time << " s\n\n";
+  cout << "Avg. time per iteration: "
+       << 1e-6 * ((pt5 - pt4).count() + (pt3 - pt2).count()) / n_iterations
+       << " ms\n";
+  cout << "Offload time:            " << 1e-6 * (pt5 - pt0).count()
+       << " ms\n\n";
 
   // Output final wavefield (computed by device) to binary file
   ofstream out_file;
   out_file.open("wavefield_snapshot.bin", ios::out | ios::binary);
-  out_file.write(reinterpret_cast<char*>(next_base), n_size * sizeof(float));
+  out_file.write(reinterpret_cast<char *>(next_base), n_size * sizeof(float));
   out_file.close();
 
   // Compute wavefield on CPU (for validation)
-  
+
   cout << "Computing wavefield in CPU ..\n";
   // Re-initialize arrays
   Initialize(prev_base, next_cpu, vel_base, n_rows, n_cols);
 
   // Compute wavefield on CPU
   // Start timer for CPU
-  dpc_common::TimeInterval t_cpu;
+  auto pt6 = std::chrono::high_resolution_clock::now();
 
   Iso2dfdIterationCpu(next_cpu, prev_base, vel_base, dtDIVdxy, n_rows, n_cols,
-                         n_iterations);
+                      n_iterations);
 
   // Compute and display time used by CPU
-  time = t_cpu.Elapsed();
+  auto pt7 = std::chrono::high_resolution_clock::now();
 
-  cout << "CPU time: " << time << " s\n\n";
+  cout << "CPU time: " << 1e-6 * (pt7 - pt6).count() << " ms\n\n";
 
   // Compute error (difference between final wavefields computed in device and
   // CPU)
@@ -365,16 +378,17 @@ int main(int argc, char* argv[]) {
 
   // Output final wavefield (computed by CPU) to binary file
   out_file.open("wavefield_snapshot_cpu.bin", ios::out | ios::binary);
-  out_file.write(reinterpret_cast<char*>(next_cpu), n_size * sizeof(float));
+  out_file.write(reinterpret_cast<char *>(next_cpu), n_size * sizeof(float));
   out_file.close();
 
   cout << "Final wavefields (from device and CPU) written to disk\n";
   cout << "Finished.\n";
 
   // Cleanup
-  delete[] prev_base;
-  delete[] next_base;
-  delete[] vel_base;
+  // free(prev_base);
+  // free(next_base);
+  // free(vel_base);
+  delete[] next_cpu;
 
   return error ? 1 : 0;
 }
