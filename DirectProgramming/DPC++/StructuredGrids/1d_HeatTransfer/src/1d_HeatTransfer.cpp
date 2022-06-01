@@ -1,4 +1,4 @@
-﻿//==============================================================
+//==============================================================
 // Copyright © 2019 Intel Corporation
 //
 // SPDX-License-Identifier: MIT
@@ -39,9 +39,7 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
-// dpc_common.hpp can be found in the dev-utilities include folder.
-// e.g., $ONEAPI_ROOT/dev-utilities/<version>/include/dpc_common.hpp
-#include "dpc_common.hpp"
+#include <sycl/ext/oneapi/experimental/graph.hpp>
 
 using namespace sycl;
 using namespace std;
@@ -110,81 +108,19 @@ void CompareResults(string prefix, float *device_results, float *host_results,
 }
 
 //
-// Compute heat on the device using DPC++ buffer
+// Compute heat on the device using SYCL Graph
 //
-void ComputeHeatBuffer(float C, size_t num_p, size_t num_iter, float *arr_CPU) {
-  // Define device selector as 'default'
-  default_selector device_selector;
-
-  // Create a device queue using DPC++ class queue
-  queue q(device_selector, dpc_common::exception_handler);
-  cout << "Using buffers\n";
-  cout << "  Kernel runs on " << q.get_device().get_info<info::device::name>()
-       << "\n";
-
-  // Temperatures of the current and next iteration
-  float *arr_host = new float[num_p + 2];
-  float *arr_host_next = new float[num_p + 2];
-
-  Initialize(arr_host, arr_host_next, num_p + 2);
-
-  // Start timer
-  dpc_common::TimeInterval t_par;
-
-  auto *arr_buf = new buffer<float>(arr_host, range(num_p + 2));
-  auto *arr_buf_next = new buffer<float>(arr_host_next, range(num_p + 2));
-
-  // Iterate over timesteps
-  for (size_t i = 0; i < num_iter; i++) {
-    auto cg = [&](auto &h) {
-      accessor arr(*arr_buf, h);
-      accessor arr_next(*arr_buf_next, h);
-      auto step = [=](id<1> idx) {
-        size_t k = idx + 1;
-
-        if (k == num_p + 1) {
-          arr_next[k] = arr[k - 1];
-        } else {
-          arr_next[k] = C * (arr[k + 1] - 2 * arr[k] + arr[k - 1]) + arr[k];
-        }
-      };
-
-      h.parallel_for(range{num_p + 1}, step);
-    };
-    q.submit(cg);
-
-    // Swap arrays for next step
-    swap(arr_buf, arr_buf_next);
-  }
-
-  // Deleting will wait for tasks to complete and write data back to host
-  // Write back is not needed for arr_buf_next
-  arr_buf_next->set_write_back(false);
-  delete arr_buf;
-  delete arr_buf_next;
-
-  // Display time used to process all time steps
-  cout << "  Elapsed time: " << t_par.Elapsed() << " sec\n";
-
-  CompareResults("buffer", ((num_iter % 2) == 0) ? arr_host : arr_host_next,
-                 arr_CPU, num_p, C);
-
-  delete[] arr_host;
-  delete[] arr_host_next;
-}
-
-//
-// Compute heat on the device using USM
-//
-void ComputeHeatUSM(float C, size_t num_p, size_t num_iter, float *arr_CPU) {
+void ComputeHeatGraph(float C, size_t num_p, size_t num_iter, float *arr_CPU) {
   // Timesteps depend on each other, so make the queue inorder
-  property_list properties{property::queue::in_order()};
+  property_list properties{
+      property::queue::in_order(),
+      sycl::ext::oneapi::property::queue::lazy_execution{}};
   // Define device selector as 'default'
   default_selector device_selector;
 
   // Create a device queue using DPC++ class queue
-  queue q(device_selector, dpc_common::exception_handler, properties);
-  cout << "Using USM\n";
+  queue q(device_selector, properties);
+  cout << "Using SYCL Graph\n";
   cout << "  Kernel runs on " << q.get_device().get_info<info::device::name>()
        << "\n";
 
@@ -195,31 +131,51 @@ void ComputeHeatUSM(float C, size_t num_p, size_t num_iter, float *arr_CPU) {
   Initialize(arr, arr_next, num_p + 2);
 
   // Start timer
-  dpc_common::TimeInterval time;
+  auto pt0 = std::chrono::high_resolution_clock::now();
 
+  auto g = sycl::ext::oneapi::experimental::make_graph();
+  auto step = [=](id<1> idx) {
+    size_t k = idx + 1;
+    if (k == num_p + 1)
+      arr_next[k] = arr[k - 1];
+    else
+      arr_next[k] = C * (arr[k + 1] - 2 * arr[k] + arr[k - 1]) + arr[k];
+  };
+  auto node_calc = g.parallel_for(range<1>{num_p + 1}, step);
+  auto node_swap = g.parallel_for(range<1>{num_p + 1},
+                                  [=](id<1> idx) {
+                                    size_t k = idx + 1;
+                                    float tmp = arr[k];
+                                    arr[k] = arr_next[k];
+                                    arr_next[k] = tmp;
+                                  },
+                                  {node_calc});
+  auto exec_graph = g.compile(q);
+  auto pt1 = std::chrono::high_resolution_clock::now();
+  cout << "  Graph creation time: " << 1e-6 * (pt1 - pt0).count() << " ms\n";
+
+  auto pt2 = std::chrono::high_resolution_clock::now();
+  exec_graph.exec_and_wait();
+  auto pt3 = std::chrono::high_resolution_clock::now();
+  // swap(arr, arr_next);
+  cout << "  First execution time: " << 1e-6 * (pt3 - pt2).count() << " ms\n";
+
+  auto pt4 = std::chrono::high_resolution_clock::now();
   // for each timesteps
-  for (size_t i = 0; i < num_iter; i++) {
-    auto step = [=](id<1> idx) {
-      size_t k = idx + 1;
-      if (k == num_p + 1)
-        arr_next[k] = arr[k - 1];
-      else
-        arr_next[k] = C * (arr[k + 1] - 2 * arr[k] + arr[k - 1]) + arr[k];
-    };
-
-    q.parallel_for(range{num_p + 1}, step);
-
-    // Swap arrays for next step
-    swap(arr, arr_next);
+  for (size_t i = 1; i < num_iter; i++) {
+    exec_graph.exec_and_wait();
+    // swap(arr, arr_next);
   }
-
-  // Wait for all the timesteps to complete
-  q.wait_and_throw();
+  auto pt5 = std::chrono::high_resolution_clock::now();
 
   // Display time used to process all time steps
-  cout << "  Elapsed time: " << time.Elapsed() << " sec\n";
+  cout << "  Avg. time per iteration: "
+       << 1e-6 * ((pt5 - pt4).count() + (pt3 - pt2).count()) / num_iter
+       << " ms\n";
+  cout << "  Elapsed time:            " << 1e-6 * (pt5 - pt0).count()
+       << " ms\n";
 
-  CompareResults("usm", arr, arr_CPU, num_p, C);
+  CompareResults("graph", arr, arr_CPU, num_p, C);
 
   free(arr, q);
   free(arr_next, q);
@@ -284,8 +240,7 @@ int main(int argc, char *argv[]) {
       ComputeHeatHostSerial(heat_CPU, heat_CPU_next, C, n_point, n_iteration);
 
   try {
-    ComputeHeatBuffer(C, n_point, n_iteration, final_CPU);
-    ComputeHeatUSM(C, n_point, n_iteration, final_CPU);
+    ComputeHeatGraph(C, n_point, n_iteration, final_CPU);
   } catch (sycl::exception e) {
     cout << "SYCL exception caught: " << e.what() << "\n";
     failures++;
