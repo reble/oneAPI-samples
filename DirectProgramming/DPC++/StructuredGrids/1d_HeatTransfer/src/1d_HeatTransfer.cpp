@@ -133,7 +133,9 @@ void ComputeHeatGraph(float C, size_t num_p, size_t num_iter, float *arr_CPU) {
   // Start timer
   auto pt0 = std::chrono::high_resolution_clock::now();
 
-  auto g = sycl::ext::oneapi::experimental::make_graph();
+  // Creating a command_graph object:
+  sycl::ext::oneapi::experimental::command_graph g;
+
   auto step = [=](id<1> idx) {
     size_t k = idx + 1;
     if (k == num_p + 1)
@@ -141,21 +143,22 @@ void ComputeHeatGraph(float C, size_t num_p, size_t num_iter, float *arr_CPU) {
     else
       arr_next[k] = C * (arr[k + 1] - 2 * arr[k] + arr[k - 1]) + arr[k];
   };
-  auto node_calc = g.parallel_for(range<1>{num_p + 1}, step);
-  auto node_swap = g.parallel_for(range<1>{num_p + 1},
+  auto node_calc = g.add([=](sycl::handler& h){h.parallel_for(range<1>{num_p + 1}, step);});
+  auto node_swap = g.add([=](sycl::handler& h){h.parallel_for(range<1>{num_p + 1},
                                   [=](id<1> idx) {
                                     size_t k = idx + 1;
                                     float tmp = arr[k];
                                     arr[k] = arr_next[k];
                                     arr_next[k] = tmp;
-                                  },
+                                  });},
                                   {node_calc});
-  auto exec_graph = g.compile(q);
+  // Creating an executable graph object to be submitted to a queue:
+  auto exec_graph = g.finalize(q.get_context());
   auto pt1 = std::chrono::high_resolution_clock::now();
   cout << "  Graph creation time: " << 1e-6 * (pt1 - pt0).count() << " ms\n";
 
   auto pt2 = std::chrono::high_resolution_clock::now();
-  exec_graph.exec_and_wait();
+  exec_graph.exec_and_wait(q);
   auto pt3 = std::chrono::high_resolution_clock::now();
   // swap(arr, arr_next);
   cout << "  First execution time: " << 1e-6 * (pt3 - pt2).count() << " ms\n";
@@ -163,7 +166,7 @@ void ComputeHeatGraph(float C, size_t num_p, size_t num_iter, float *arr_CPU) {
   auto pt4 = std::chrono::high_resolution_clock::now();
   // for each timesteps
   for (size_t i = 1; i < num_iter; i++) {
-    exec_graph.exec_and_wait();
+    exec_graph.exec_and_wait(q);
     // swap(arr, arr_next);
   }
   auto pt5 = std::chrono::high_resolution_clock::now();
