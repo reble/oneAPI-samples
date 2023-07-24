@@ -113,13 +113,10 @@ void CompareResults(string prefix, float *device_results, float *host_results,
 void ComputeHeatGraph(float C, size_t num_p, size_t num_iter, float *arr_CPU) {
   // Timesteps depend on each other, so make the queue inorder
   property_list properties{
-      property::queue::in_order(),
-      sycl::ext::oneapi::property::queue::lazy_execution{}};
-  // Define device selector as 'default'
-  default_selector device_selector;
+      property::queue::in_order()};
 
   // Create a device queue using DPC++ class queue
-  queue q(device_selector, properties);
+  queue q(sycl::gpu_selector_v, properties);
   cout << "Using SYCL Graph\n";
   cout << "  Kernel runs on " << q.get_device().get_info<info::device::name>()
        << "\n";
@@ -133,7 +130,7 @@ void ComputeHeatGraph(float C, size_t num_p, size_t num_iter, float *arr_CPU) {
   // Start timer
   auto pt0 = std::chrono::high_resolution_clock::now();
 
-  auto g = sycl::ext::oneapi::experimental::make_graph();
+  sycl::ext::oneapi::experimental::command_graph g(q.get_context(), q.get_device());
   auto step = [=](id<1> idx) {
     size_t k = idx + 1;
     if (k == num_p + 1)
@@ -141,21 +138,21 @@ void ComputeHeatGraph(float C, size_t num_p, size_t num_iter, float *arr_CPU) {
     else
       arr_next[k] = C * (arr[k + 1] - 2 * arr[k] + arr[k - 1]) + arr[k];
   };
-  auto node_calc = g.parallel_for(range<1>{num_p + 1}, step);
-  auto node_swap = g.parallel_for(range<1>{num_p + 1},
+  auto node_calc = g.add([=](sycl::handler& h){h.parallel_for(range<1>{num_p + 1}, step);});
+  auto node_swap = g.add([=](sycl::handler& h){h.parallel_for(range<1>{num_p + 1},
                                   [=](id<1> idx) {
                                     size_t k = idx + 1;
                                     float tmp = arr[k];
                                     arr[k] = arr_next[k];
                                     arr_next[k] = tmp;
-                                  },
-                                  {node_calc});
-  auto exec_graph = g.compile(q);
+                                  });},
+                                  {sycl::ext::oneapi::experimental::property::node::depends_on(node_calc)});
+  auto exec_graph = g.finalize();
   auto pt1 = std::chrono::high_resolution_clock::now();
   cout << "  Graph creation time: " << 1e-6 * (pt1 - pt0).count() << " ms\n";
 
   auto pt2 = std::chrono::high_resolution_clock::now();
-  exec_graph.exec_and_wait();
+  q.submit([&](sycl::handler& h){h.ext_oneapi_graph(exec_graph);});
   auto pt3 = std::chrono::high_resolution_clock::now();
   // swap(arr, arr_next);
   cout << "  First execution time: " << 1e-6 * (pt3 - pt2).count() << " ms\n";
@@ -163,7 +160,7 @@ void ComputeHeatGraph(float C, size_t num_p, size_t num_iter, float *arr_CPU) {
   auto pt4 = std::chrono::high_resolution_clock::now();
   // for each timesteps
   for (size_t i = 1; i < num_iter; i++) {
-    exec_graph.exec_and_wait();
+    q.submit([&](sycl::handler& h){h.ext_oneapi_graph(exec_graph);});
     // swap(arr, arr_next);
   }
   auto pt5 = std::chrono::high_resolution_clock::now();
