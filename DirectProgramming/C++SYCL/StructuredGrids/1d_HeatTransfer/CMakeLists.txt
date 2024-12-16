@@ -19,6 +19,8 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -fsycl -std=c++17")
 
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lOpenCL -lsycl")
 
+include_directories(../../../../common)
+
 add_executable (1d_HeatTransfer src/1d_HeatTransfer.cpp)
 
 add_custom_target (run 
